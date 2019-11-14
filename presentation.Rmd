@@ -1,0 +1,316 @@
+---
+title: "Case Study: Queensland Car Crash Data"
+author: "Liam Crowhurst"
+date: "14/11/2019"
+runtime: shiny
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The Queensland government provides us with a fantastic resource for open data exploration. Commonly accessed data sets include:
+
+* Mobile speed camera sites
+* Crash data - Queensland roads
+* Upcoming fireworks displays
+* Groundwater Database
+* Horse and cattle brands
+
+Access the home page [here](https://www.data.qld.gov.au/)
+
+## Crash Data - Queensland roads
+
+QLD gov provides 6 datasets relating to car crashes, available [here](https://www.data.qld.gov.au/dataset/crash-data-from-queensland-roads).
+
+The case study focuses on one particular dataset: Road crash locations.
+
+"Location and characteristics of crashes within Queensland for all reported Road Traffic Crashes"
+
+Key points:
+
+* Stored in a flat csv - easy data importing
+* Date information is stored as year, month, day of week, hour
+* 19 Location variables including coordinates, street, ABS areas
+
+## Crash Data - Queensland roads
+Key points cont:
+
+* Severity of the crash 
+  - Minor injury
+  - Medical treatment
+  - Hospitalisation
+  - Fatal
+* Road alignment
+  - Straight
+  - Curved
+  - Level
+  - Obscured
+
+## Data cleaning
+
+Remove observations that are extremely rare or have incomplete records.
+Classify and group variable responses to be more easily understood.
+
+Removing certain values in `Crash_Nature` and `Crash_Traffic_Control` where observations were exceedingly rare.
+
+`Crash_Day_Of_Week` will be grouped into two
+
+`Crash_Severity` will be used as the response, where the 4 responses are grouped into a binary response.
+`Crash_Emergency`
+
+* `Yes` = `Fatal`, `Hospitalisation`
+* `No`  = `Medical treatment`, `Minor Injury`
+
+## Data cleaning
+
+Remove predictor variables that don't directly influence the crash.
+
+For example, the casualty count is only recorded after the incident and should not be used to influence the model.
+
+## Data cleaning {.smaller}
+
+```{r warning=FALSE, message=FALSE}
+library(dplyr)
+library(lattice)
+library(caret)
+library(DT)
+```
+
+```{r cache = TRUE}
+crash_data <- read.csv("crash_data_18.csv",
+                       stringsAsFactors = F) %>%
+  filter(
+    Crash_Year == 2018,
+    !Crash_Nature %in% c("Struck by external load", "Struck by internal load",
+                         "Collision - miscellaneous"),
+    !Crash_Traffic_Control %in% c("Railway - lights and boom gate",
+                                  "Railway - lights only",
+                                  "Railway crossing sign", "Police",
+                                  "Supervised school crossing", "School crossing - flags"),
+    Crash_Speed_Limit != "",
+  ) %>%
+  mutate(
+    Crash_Emergency = as.factor(if_else(Crash_Severity %in% c("Fatal","Hospitalisation"), 'Yes', 'No')),
+    Crash_Week = if_else(Crash_Day_Of_Week %in% c("Saturday", "Sunday"), 'Weekend', 'Weekday')
+  ) %>% as_tibble() %>% 
+  select(-starts_with("Count"), -contains("DCA"), -contains("Street"), -contains("Road_Name"))
+```
+
+## Location of Fatal Crashes in 2018
+
+224 Fatal Crashes in 2018
+
+```{r echo = FALSE}
+library(leaflet)
+leaflet(crash_data %>% filter(Crash_Year == 2018, Crash_Severity == "Fatal")) %>% 
+  addTiles() %>% 
+  addMarkers(lng = ~Crash_Longitude_GDA94, lat = ~Crash_Latitude_GDA94)
+```
+
+## Exploration Plots
+
+```{r echo = FALSE}
+histogram(~ Crash_Emergency | Crash_Speed_Limit, data = crash_data,
+          scales = list(x = list(rot = 45)),
+          main = "Speed Limits")
+```
+
+***
+
+```{r echo = FALSE}
+histogram(~ Crash_Emergency | Crash_Road_Horiz_Align, data = crash_data,
+          scales = list(x = list(rot = 45)),
+          main = "Road Horizontal Alignment")
+```
+
+***
+
+```{r echo = FALSE}
+histogram(~ Crash_Emergency | Crash_Road_Vert_Align, data = crash_data,
+          scales = list(x = list(rot = 45)),
+          main = "Road Vertical Alignment")
+```
+
+***
+
+```{r echo = FALSE}
+histogram(~ Crash_Emergency | Crash_Nature, data = crash_data,
+          scales = list(x = list(rot = 45)),
+          main = "Nature of Crash")
+```
+
+***
+
+```{r echo = FALSE}
+histogram(~ as.numeric(Crash_Hour) | Crash_Emergency, data = crash_data,
+          scales = list(x = list(rot = 45)), breaks = NULL, nint = 24,
+          main = "Hour of Crash", xlab = "Hour")
+```
+
+***
+
+```{r echo = FALSE}
+histogram(~ Crash_Emergency | Crash_Day_Of_Week, data = crash_data,
+          scales = list(x = list(rot = 45)),
+          main = "Day of Crash", xlab = "Day")
+```
+
+## What model to use?
+
+The model selcted is a binomial generalised linear model with a logit link.
+Reasons for using this model:
+
+* Two responses, Yes and No
+* Logit link gives us a logistic regression
+* Want to estimate the effects of variables on the response
+* (Relatively) Easy implementation in R
+
+## Testing and Training Data {.smaller}
+
+Create a training dataset, to generate models on.
+
+Create a complementary testing dataset, to test and evaluate the models on.
+
+```{r}
+train_index <- createDataPartition(crash_data$Crash_Emergency, p = 0.6,
+                                   list = F, times = 1)
+
+crash_train <- crash_data[ train_index,]
+crash_test  <- crash_data[-train_index,]
+```
+
+## Variable Selection
+
+Two methods for variable selection:
+
+* Information::create_infotables()
+  - Computes the Weight of Effect (WoE) on each predictor variable
+  - Computes the Information Value (IV) from WoE for each predictor variable
+  - Both determine variables that have significant effect on the response
+* MASS::stepAIC()
+  - Removes variables to lower the Akaike Information Criteria (AIC)
+  - Removing these variables increases the quality of the model
+
+## WoE and IV {.smaller}
+
+The IV tells the predictive power of an independent variable in relation to the dependent variable.
+
+$$
+WOE = ln(\texttt{EventYes}_i/\texttt{EventBad}_i)\\
+IV = \sum(\texttt{EventYes}_i-\texttt{EventBad}_i)\times WOE_i
+$$
+
+## IV in R
+
+```{r}
+infotable <- 
+  Information::create_infotables(
+    # convert factor to a numeric, then subtract 1 to give it range 0 to 1
+    data = crash_train %>% mutate(Crash_Emergency = as.numeric(Crash_Emergency) - 1), 
+    y = "Crash_Emergency")
+```
+
+## Interpreting WoE and IV
+
+Some handy industry rules of thumb for predictive power:
+
+* IV < 0.02 : Useless
+* 0.02 < IV < 0.1 : Weak
+* 0.1 < IV < 0.3 : Medium
+* 0.3 < IV < 0.5 : Strong
+* IV > 0.5 : Suspiciously Strong
+
+## WoE of Crash Nature {.smaller}
+
+```{r echo=FALSE}
+datatable(infotable$Tables$Crash_Nature %>% 
+                mutate(
+                  Percent = round(Percent, 2),
+                  WOE = round(WOE, 2),
+                  IV  = round(IV, 3)) %>% 
+                arrange(-IV))
+```
+
+## IV for All Predictor Variables {.smaller}
+
+```{r echo = FALSE}
+DT::datatable(infotable$Summary %>% 
+                mutate(IV  = round(IV, 3)) %>% 
+                arrange(-IV))
+```
+
+## Let's build the model! {.smaller}
+
+Create a `NULL` model, able to be compared to against new models to check for improvements.
+
+```{r}
+glm_null <- glm(Crash_Emergency ~ Crash_Nature + Crash_Type + 
+                  Loc_ABS_Remoteness + Crash_Speed_Limit + 
+                  Crash_Lighting_Condition + Crash_Road_Horiz_Align +
+                  Crash_Hour + Crash_Traffic_Control + Crash_Roadway_Feature +
+                  Crash_Day_Of_Week + Crash_Week + Crash_Road_Vert_Align + 
+                  Crash_Road_Surface_Condition + 
+                  Crash_Ref_Number + Crash_Month + Crash_Year,
+                data = crash_train, family = binomial(link = "logit"))
+AIC(glm_null)
+```
+
+## Stepwise AIC {.smaller}
+
+AIC is a penalty term, the higher the score, the worse the model performs.
+Stepwise AIC removes indivual predictors and assess the score. If a variable is 
+removed and the AIC decreases, it is discarded from the model.
+
+```{r }
+glm_step <- MASS::stepAIC(glm_null)
+```
+
+***
+
+```{r}
+AIC(glm_null, glm_step)
+BIC(glm_null, glm_step)
+formula(glm_step)
+```
+
+## Prediction and Validation
+
+```{r}
+pred <- predict(glm_step, newdata = crash_test, type = "response")
+# pred
+
+# Recode factors
+
+y_pred_num <- ifelse(pred > 0.5, 1, 0)
+y_pred <- factor(y_pred_num, levels=c(0, 1))
+y_act <- as.numeric(crash_test$Crash_Emergency)-1
+
+# Accuracy
+mean(y_pred == y_act)
+```
+
+## Options for improving the model?
+
+Classifying 66% of all crashes correctly isn't bad, but it isn't great either. 
+Here are some options for improving the model
+
+* Try a different link function ie log, cauchy, probit etc
+* Interaction terms
+* Use a different modelling technique 
+
+## Analysis of Results {.smaller}
+
+```{r}
+odds_ratio <- exp(cbind(OR = coef(glm_step)))
+DT::datatable(round(odds_ratio, 5))
+```
+
+## Assumptions
+
+* That the speed limits were accurate ie no one was speeding at time of crash
+* No one was drink driving
+* Some crashes may not have been reported
