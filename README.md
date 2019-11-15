@@ -4,7 +4,10 @@ Here are the files I used to present to the Brisbane Data Science Meetup on the 
 
 Unfortunately, there are interactive components in my presentation and thus 
 cannot save my presentation as a static html file. To recreate the presentation,
-clone this git repo, open the file in Rstudio and press "Run presentation".
+clone this git repo, open the `presentation.Rmd` file in Rstudio and press 
+"Run presentation".
+
+I am looking to host my presentation, and will have an update soon.
 
 Main files:
 
